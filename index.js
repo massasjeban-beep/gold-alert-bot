@@ -35,52 +35,68 @@ async function analyzeWithGemini(chartData, news) {
   const { action, price, entry, sl, tp1, tp2, ema21, ema50, ema200,
           support, resistance, atr, trend, smc, timeframe, ticker } = chartData;
 
-  const prompt = `You are a professional SMC Gold Trading Analyst.
+  const prompt = `คุณเป็น SMC Gold Trading Analyst วิเคราะห์ทองคำ XAUUSD
 
-Chart Data:
-- Symbol: ${ticker}, Timeframe: ${timeframe}
-- Price: $${price}, Trend: ${trend}
-- EMA 21/50/200: ${ema21} / ${ema50} / ${ema200}
-- Support: ${support}, Resistance: ${resistance}, ATR: ${atr}
-- SMC Signal: ${smc}
-- Pine Script Signal: ${action}
-- Entry: ${entry}, SL: ${sl}, TP1: ${tp1}, TP2: ${tp2}
+ข้อมูลกราฟ:
+- ราคาปัจจุบัน: $${price} แนวโน้ม: ${trend}
+- EMA 21/50/200: ${ema21}/${ema50}/${ema200}
+- Support: ${support} Resistance: ${resistance}
+- SMC: ${smc} สัญญาณ: ${action}
+- Entry: ${entry} SL: ${sl} TP1: ${tp1} TP2: ${tp2}
 
-Latest Gold News:
-${news}
+ข่าวทอง: ${news}
 
-Respond with ONLY valid JSON, no markdown, no explanation:
-{"direction":"BUY","confidence":"HIGH","entry":${entry},"sl":${sl},"tp1":${tp1},"tp2":${tp2},"rr_ratio":"1:2","smc_reason":"Bullish OB with BOS confirms upward momentum","news_impact":"Neutral","news_reason":"No major news impact","final_reason":"Strong bullish setup with SMC confirmation","risk_level":"MEDIUM"}`;
+กรุณาวิเคราะห์และตอบในรูปแบบนี้:
+Direction: BUY/SELL/WAIT
+Confidence: HIGH/MEDIUM/LOW
+Entry: (ราคา)
+SL: (ราคา)
+TP1: (ราคา)
+TP2: (ราคา)
+RR: (เช่น 1:2)
+SMC: (วิเคราะห์ 1 ประโยค)
+News: Positive/Negative/Neutral - (อธิบาย 1 ประโยค)
+Summary: (สรุป 1 ประโยค)
+Risk: HIGH/MEDIUM/LOW`;
 
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.1 }
-      }),
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
     }
   );
 
   const data = await res.json();
-  const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "วิเคราะห์ไม่สำเร็จ";
   
-  // Extract JSON from response
-  const jsonMatch = raw.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error("Gemini ไม่ส่ง JSON กลับมา: " + raw);
-  
-  return JSON.parse(jsonMatch[0]);
+  // Parse text response
+  const get = (key) => {
+    const match = text.match(new RegExp(`${key}:\\s*(.+)`));
+    return match ? match[1].trim() : "N/A";
+  };
+
+  return {
+    direction:   get("Direction"),
+    confidence:  get("Confidence"),
+    entry:       get("Entry"),
+    sl:          get("SL"),
+    tp1:         get("TP1"),
+    tp2:         get("TP2"),
+    rr_ratio:    get("RR"),
+    smc_reason:  get("SMC"),
+    news_line:   get("News"),
+    final_reason:get("Summary"),
+    risk_level:  get("Risk"),
+  };
 }
 
 function buildMessage(ai, chartData, news) {
   const dir = ai.direction || "WAIT";
-  const dirEmoji  = dir === "BUY" ? "🟢" : dir === "SELL" ? "🔴" : "⏸";
+  const dirEmoji  = dir.includes("BUY") ? "🟢" : dir.includes("SELL") ? "🔴" : "⏸";
   const conf = ai.confidence || "LOW";
-  const confEmoji = conf === "HIGH" ? "🔥" : conf === "MEDIUM" ? "⚡" : "💤";
-  const impact = ai.news_impact || "Neutral";
-  const newsEmoji = impact === "Positive" ? "📈" : impact === "Negative" ? "📉" : "➡️";
+  const confEmoji = conf.includes("HIGH") ? "🔥" : conf.includes("MEDIUM") ? "⚡" : "💤";
 
   return `
 ${dirEmoji} <b>XAUUSD ${dir}</b>  ${confEmoji} ${conf} Confidence
@@ -104,7 +120,7 @@ ${dirEmoji} <b>XAUUSD ${dir}</b>  ${confEmoji} ${conf} Confidence
 ━━━━━━━━━━━━━━━━━
 🧠 <b>AI Analysis</b>
 • SMC  : ${ai.smc_reason}
-• ${newsEmoji} ข่าว (${impact}) : ${ai.news_reason}
+• 📰 ข่าว : ${ai.news_line}
 • สรุป : ${ai.final_reason}
 
 ⚠️ ความเสี่ยง : ${ai.risk_level}
@@ -118,7 +134,6 @@ ${news.split("\n").slice(0, 3).map(n => `• ${n}`).join("\n")}
 }
 
 app.post("/webhook", async (req, res) => {
-  console.log("📩 Alert:", req.body);
   try {
     const chartData = req.body;
     await sendTelegram(`⏳ <b>รับสัญญาณ ${chartData.ticker} ${chartData.action}</b>\nราคา: $${chartData.price}\nกำลังวิเคราะห์...`);
@@ -128,7 +143,6 @@ app.post("/webhook", async (req, res) => {
     await sendTelegram(msg);
     res.status(200).json({ ok: true });
   } catch (err) {
-    console.error("❌", err.message);
     await sendTelegram(`❌ Error: ${err.message}`);
     res.status(500).json({ ok: false });
   }
@@ -158,4 +172,3 @@ app.get("/", (req, res) => res.send("✅ Gold SMC Alert System Running"));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Server port ${PORT}`));
-                      
