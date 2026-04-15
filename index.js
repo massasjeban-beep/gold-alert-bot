@@ -25,9 +25,9 @@ async function getGoldNews() {
       .map(m => (m[1] || m[2] || "").trim())
       .filter(t => /gold|xau|fed|rate|inflation|cpi|usd|war|crisis|dollar/i.test(t))
       .slice(0, 5);
-    return titles.length ? titles.join("\n") : "ไม่พบข่าวทองใหม่";
+    return titles.length ? titles.join("\n") : "No gold news found";
   } catch {
-    return "ดึงข่าวไม่สำเร็จ";
+    return "Could not fetch news";
   }
 }
 
@@ -35,60 +35,62 @@ async function analyzeWithGemini(chartData, news) {
   const { action, price, entry, sl, tp1, tp2, ema21, ema50, ema200,
           support, resistance, atr, trend, smc, timeframe, ticker } = chartData;
 
-  const prompt = `คุณเป็น SMC Gold Trading Analyst วิเคราะห์ทองคำ XAUUSD
+  const prompt = `You are a professional XAUUSD SMC Trading Analyst. Respond in ENGLISH ONLY.
 
-ข้อมูลกราฟ:
-- ราคาปัจจุบัน: $${price} แนวโน้ม: ${trend}
-- EMA 21/50/200: ${ema21}/${ema50}/${ema200}
-- Support: ${support} Resistance: ${resistance}
-- SMC: ${smc} สัญญาณ: ${action}
-- Entry: ${entry} SL: ${sl} TP1: ${tp1} TP2: ${tp2}
+Chart: ${ticker} ${timeframe} | Price: ${price} | Trend: ${trend}
+EMA: ${ema21}/${ema50}/${ema200} | Support: ${support} | Resistance: ${resistance}
+SMC: ${smc} | Signal: ${action}
+Entry: ${entry} | SL: ${sl} | TP1: ${tp1} | TP2: ${tp2}
+News: ${news}
 
-ข่าวทอง: ${news}
-
-กรุณาวิเคราะห์และตอบในรูปแบบนี้:
-Direction: BUY/SELL/WAIT
-Confidence: HIGH/MEDIUM/LOW
-Entry: (ราคา)
-SL: (ราคา)
-TP1: (ราคา)
-TP2: (ราคา)
-RR: (เช่น 1:2)
-SMC: (วิเคราะห์ 1 ประโยค)
-News: Positive/Negative/Neutral - (อธิบาย 1 ประโยค)
-Summary: (สรุป 1 ประโยค)
-Risk: HIGH/MEDIUM/LOW`;
+Reply EXACTLY in this format (no extra text):
+DIRECTION: BUY
+CONFIDENCE: HIGH
+ENTRY: ${entry}
+SL: ${sl}
+TP1: ${tp1}
+TP2: ${tp2}
+RR: 1:2
+SMC_REASON: Bullish OB confirmed with BOS, price above EMA200
+NEWS_IMPACT: Neutral
+NEWS_REASON: No significant news affecting gold
+SUMMARY: Strong bullish setup with SMC confirmation and trend alignment
+RISK: MEDIUM`;
 
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.1, maxOutputTokens: 300 }
+      }),
     }
   );
 
   const data = await res.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "วิเคราะห์ไม่สำเร็จ";
-  
-  // Parse text response
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+  console.log("Gemini response:", text);
+
   const get = (key) => {
-    const match = text.match(new RegExp(`${key}:\\s*(.+)`));
+    const match = text.match(new RegExp(`${key}:\\s*(.+)`, "i"));
     return match ? match[1].trim() : "N/A";
   };
 
   return {
-    direction:   get("Direction"),
-    confidence:  get("Confidence"),
-    entry:       get("Entry"),
-    sl:          get("SL"),
-    tp1:         get("TP1"),
-    tp2:         get("TP2"),
-    rr_ratio:    get("RR"),
-    smc_reason:  get("SMC"),
-    news_line:   get("News"),
-    final_reason:get("Summary"),
-    risk_level:  get("Risk"),
+    direction:    get("DIRECTION"),
+    confidence:   get("CONFIDENCE"),
+    entry:        get("ENTRY"),
+    sl:           get("SL"),
+    tp1:          get("TP1"),
+    tp2:          get("TP2"),
+    rr_ratio:     get("RR"),
+    smc_reason:   get("SMC_REASON"),
+    news_impact:  get("NEWS_IMPACT"),
+    news_reason:  get("NEWS_REASON"),
+    final_reason: get("SUMMARY"),
+    risk_level:   get("RISK"),
   };
 }
 
@@ -97,6 +99,8 @@ function buildMessage(ai, chartData, news) {
   const dirEmoji  = dir.includes("BUY") ? "🟢" : dir.includes("SELL") ? "🔴" : "⏸";
   const conf = ai.confidence || "LOW";
   const confEmoji = conf.includes("HIGH") ? "🔥" : conf.includes("MEDIUM") ? "⚡" : "💤";
+  const impact = ai.news_impact || "Neutral";
+  const newsEmoji = impact.includes("Positive") ? "📈" : impact.includes("Negative") ? "📉" : "➡️";
 
   return `
 ${dirEmoji} <b>XAUUSD ${dir}</b>  ${confEmoji} ${conf} Confidence
@@ -120,7 +124,7 @@ ${dirEmoji} <b>XAUUSD ${dir}</b>  ${confEmoji} ${conf} Confidence
 ━━━━━━━━━━━━━━━━━
 🧠 <b>AI Analysis</b>
 • SMC  : ${ai.smc_reason}
-• 📰 ข่าว : ${ai.news_line}
+• ${newsEmoji} ข่าว (${impact}) : ${ai.news_reason}
 • สรุป : ${ai.final_reason}
 
 ⚠️ ความเสี่ยง : ${ai.risk_level}
