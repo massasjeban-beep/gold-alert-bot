@@ -35,43 +35,55 @@ async function analyzeWithGemini(chartData, news) {
   const { action, price, entry, sl, tp1, tp2, ema21, ema50, ema200,
           support, resistance, atr, trend, smc, timeframe, ticker } = chartData;
 
-  const prompt = `
-คุณเป็น SMC Gold Trading Analyst ระดับ Professional
+  const prompt = `You are a professional SMC Gold Trading Analyst.
 
-Symbol: ${ticker} | Timeframe: ${timeframe} | ราคา: $${price} | แนวโน้ม: ${trend}
-EMA 21/50/200: ${ema21} / ${ema50} / ${ema200}
-Support: ${support} | Resistance: ${resistance} | ATR: ${atr}
-SMC: ${smc} | สัญญาณ: ${action}
-Entry: ${entry} | SL: ${sl} | TP1: ${tp1} | TP2: ${tp2}
+Chart Data:
+- Symbol: ${ticker}, Timeframe: ${timeframe}
+- Price: $${price}, Trend: ${trend}
+- EMA 21/50/200: ${ema21} / ${ema50} / ${ema200}
+- Support: ${support}, Resistance: ${resistance}, ATR: ${atr}
+- SMC Signal: ${smc}
+- Pine Script Signal: ${action}
+- Entry: ${entry}, SL: ${sl}, TP1: ${tp1}, TP2: ${tp2}
 
-ข่าวทอง: ${news}
+Latest Gold News:
+${news}
 
-ตอบ JSON เท่านั้น ห้ามมีข้อความอื่น:
-{"direction":"BUY หรือ SELL หรือ WAIT","confidence":"HIGH หรือ MEDIUM หรือ LOW","entry":0,"sl":0,"tp1":0,"tp2":0,"rr_ratio":"1:2","smc_reason":"","news_impact":"Positive หรือ Negative หรือ Neutral","news_reason":"","final_reason":"","risk_level":"HIGH หรือ MEDIUM หรือ LOW"}
-`;
+Respond with ONLY valid JSON, no markdown, no explanation:
+{"direction":"BUY","confidence":"HIGH","entry":${entry},"sl":${sl},"tp1":${tp1},"tp2":${tp2},"rr_ratio":"1:2","smc_reason":"Bullish OB with BOS confirms upward momentum","news_impact":"Neutral","news_reason":"No major news impact","final_reason":"Strong bullish setup with SMC confirmation","risk_level":"MEDIUM"}`;
 
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.1 }
+      }),
     }
   );
 
   const data = await res.json();
-  const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-  return JSON.parse(raw.replace(/```json|```/g, "").trim());
+  const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+  
+  // Extract JSON from response
+  const jsonMatch = raw.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error("Gemini ไม่ส่ง JSON กลับมา: " + raw);
+  
+  return JSON.parse(jsonMatch[0]);
 }
 
 function buildMessage(ai, chartData, news) {
-  const dir = ai.direction;
+  const dir = ai.direction || "WAIT";
   const dirEmoji  = dir === "BUY" ? "🟢" : dir === "SELL" ? "🔴" : "⏸";
-  const confEmoji = ai.confidence === "HIGH" ? "🔥" : ai.confidence === "MEDIUM" ? "⚡" : "💤";
-  const newsEmoji = ai.news_impact === "Positive" ? "📈" : ai.news_impact === "Negative" ? "📉" : "➡️";
+  const conf = ai.confidence || "LOW";
+  const confEmoji = conf === "HIGH" ? "🔥" : conf === "MEDIUM" ? "⚡" : "💤";
+  const impact = ai.news_impact || "Neutral";
+  const newsEmoji = impact === "Positive" ? "📈" : impact === "Negative" ? "📉" : "➡️";
 
   return `
-${dirEmoji} <b>XAUUSD ${dir}</b>  ${confEmoji} ${ai.confidence} Confidence
+${dirEmoji} <b>XAUUSD ${dir}</b>  ${confEmoji} ${conf} Confidence
 
 ━━━━━━━━━━━━━━━━━
 📊 <b>Technical (SMC + EMA)</b>
@@ -92,7 +104,7 @@ ${dirEmoji} <b>XAUUSD ${dir}</b>  ${confEmoji} ${ai.confidence} Confidence
 ━━━━━━━━━━━━━━━━━
 🧠 <b>AI Analysis</b>
 • SMC  : ${ai.smc_reason}
-• ${newsEmoji} ข่าว (${ai.news_impact}) : ${ai.news_reason}
+• ${newsEmoji} ข่าว (${impact}) : ${ai.news_reason}
 • สรุป : ${ai.final_reason}
 
 ⚠️ ความเสี่ยง : ${ai.risk_level}
@@ -146,4 +158,4 @@ app.get("/", (req, res) => res.send("✅ Gold SMC Alert System Running"));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Server port ${PORT}`));
-                            
+                      
