@@ -3,12 +3,10 @@ const fetch = require("node-fetch");
 const app = express();
 app.use(express.json());
 
-// ===== ENV / ตั้งค่า =====
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID   = process.env.TELEGRAM_CHAT_ID;
-const ANTHROPIC_API_KEY  = process.env.ANTHROPIC_API_KEY;
+const GEMINI_API_KEY     = process.env.GEMINI_API_KEY;
 
-// ── ส่ง Telegram ──────────────────────────────────────────
 async function sendTelegram(text) {
   await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: "POST",
@@ -17,7 +15,6 @@ async function sendTelegram(text) {
   });
 }
 
-// ── ดึงข่าวทอง ────────────────────────────────────────────
 async function getGoldNews() {
   try {
     const res = await fetch("https://feeds.reuters.com/reuters/businessNews", {
@@ -34,85 +31,39 @@ async function getGoldNews() {
   }
 }
 
-// ── วิเคราะห์กราฟ + ข่าว ด้วย Claude AI ──────────────────
-async function analyzeWithAI(chartData, news) {
-  const {
-    action, price, entry, sl, tp1, tp2,
-    ema21, ema50, ema200,
-    support, resistance, atr,
-    trend, smc, timeframe, ticker
-  } = chartData;
+async function analyzeWithGemini(chartData, news) {
+  const { action, price, entry, sl, tp1, tp2, ema21, ema50, ema200,
+          support, resistance, atr, trend, smc, timeframe, ticker } = chartData;
 
   const prompt = `
-คุณเป็น Smart Money Concept (SMC) Gold Trading Analyst ระดับ Professional
+คุณเป็น SMC Gold Trading Analyst ระดับ Professional
 
-=== ข้อมูลกราฟจาก TradingView ===
-Symbol     : ${ticker}
-Timeframe  : ${timeframe}
-ราคาปัจจุบัน: $${price}
-แนวโน้ม    : ${trend}
+Symbol: ${ticker} | Timeframe: ${timeframe} | ราคา: $${price} | แนวโน้ม: ${trend}
+EMA 21/50/200: ${ema21} / ${ema50} / ${ema200}
+Support: ${support} | Resistance: ${resistance} | ATR: ${atr}
+SMC: ${smc} | สัญญาณ: ${action}
+Entry: ${entry} | SL: ${sl} | TP1: ${tp1} | TP2: ${tp2}
 
---- EMA ---
-EMA 21  : ${ema21}
-EMA 50  : ${ema50}
-EMA 200 : ${ema200}
+ข่าวทอง: ${news}
 
---- Support / Resistance ---
-Support    : ${support}
-Resistance : ${resistance}
-
---- SMC Signal ---
-${smc}
-สัญญาณ Pine Script: ${action}
-ATR (14): ${atr}
-
---- จุด Entry/SL/TP จาก Pine Script ---
-Entry: ${entry}
-SL   : ${sl}
-TP1  : ${tp1}
-TP2  : ${tp2}
-
-=== ข่าวที่กระทบทองล่าสุด ===
-${news}
-
-=== คำสั่ง ===
-วิเคราะห์รวม Chart + SMC + ข่าว แล้วตอบ JSON เท่านั้น ห้ามมีข้อความอื่น:
-{
-  "direction": "BUY หรือ SELL หรือ WAIT",
-  "confidence": "HIGH หรือ MEDIUM หรือ LOW",
-  "entry": ราคาเข้าที่แนะนำ (ตัวเลข),
-  "sl": stop loss (ตัวเลข),
-  "tp1": take profit 1 (ตัวเลข),
-  "tp2": take profit 2 (ตัวเลข),
-  "rr_ratio": "Risk:Reward เช่น 1:2.5",
-  "smc_reason": "วิเคราะห์ SMC 1-2 ประโยค",
-  "news_impact": "Positive หรือ Negative หรือ Neutral",
-  "news_reason": "อธิบายข่าว 1 ประโยค",
-  "final_reason": "สรุปรวม 1-2 ประโยค",
-  "risk_level": "HIGH หรือ MEDIUM หรือ LOW"
-}
+ตอบ JSON เท่านั้น ห้ามมีข้อความอื่น:
+{"direction":"BUY หรือ SELL หรือ WAIT","confidence":"HIGH หรือ MEDIUM หรือ LOW","entry":0,"sl":0,"tp1":0,"tp2":0,"rr_ratio":"1:2","smc_reason":"","news_impact":"Positive หรือ Negative หรือ Neutral","news_reason":"","final_reason":"","risk_level":"HIGH หรือ MEDIUM หรือ LOW"}
 `;
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 600,
-      messages: [{ role: "user", content: prompt }],
-    }),
-  });
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+    }
+  );
 
   const data = await res.json();
-  const raw = data.content?.[0]?.text || "{}";
+  const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
   return JSON.parse(raw.replace(/```json|```/g, "").trim());
 }
 
-// ── สร้างข้อความ Telegram ─────────────────────────────────
 function buildMessage(ai, chartData, news) {
   const dir = ai.direction;
   const dirEmoji  = dir === "BUY" ? "🟢" : dir === "SELL" ? "🔴" : "⏸";
@@ -154,14 +105,13 @@ ${news.split("\n").slice(0, 3).map(n => `• ${n}`).join("\n")}
 `.trim();
 }
 
-// ── Webhook รับจาก TradingView ────────────────────────────
 app.post("/webhook", async (req, res) => {
   console.log("📩 Alert:", req.body);
   try {
     const chartData = req.body;
-    await sendTelegram(`⏳ <b>รับสัญญาณ ${chartData.ticker} ${chartData.action}</b>\nราคา: $${chartData.price}\nกำลังวิเคราะห์ SMC + ข่าว...`);
+    await sendTelegram(`⏳ <b>รับสัญญาณ ${chartData.ticker} ${chartData.action}</b>\nราคา: $${chartData.price}\nกำลังวิเคราะห์...`);
     const news = await getGoldNews();
-    const ai   = await analyzeWithAI(chartData, news);
+    const ai   = await analyzeWithGemini(chartData, news);
     const msg  = buildMessage(ai, chartData, news);
     await sendTelegram(msg);
     res.status(200).json({ ok: true });
@@ -172,7 +122,6 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// ── ทดสอบ ─────────────────────────────────────────────────
 app.get("/test", async (req, res) => {
   const mockData = {
     ticker: "XAUUSD", action: "BUY", price: 2685.50,
@@ -184,7 +133,7 @@ app.get("/test", async (req, res) => {
   try {
     await sendTelegram("⏳ ทดสอบระบบ กำลังวิเคราะห์...");
     const news = await getGoldNews();
-    const ai   = await analyzeWithAI(mockData, news);
+    const ai   = await analyzeWithGemini(mockData, news);
     const msg  = buildMessage(ai, mockData, news);
     await sendTelegram(msg);
     res.send("✅ ส่งข้อความทดสอบแล้ว ตรวจสอบ Telegram");
@@ -197,3 +146,4 @@ app.get("/", (req, res) => res.send("✅ Gold SMC Alert System Running"));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Server port ${PORT}`));
+                            
